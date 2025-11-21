@@ -1,0 +1,240 @@
+name: Auto-Review Tagged Issue with OpenHands
+
+on:
+  workflow_call:
+    inputs:
+      max_iterations:
+        required: false
+        type: number
+        default: 50
+      macro:
+        required: false
+        type: string
+        default: "@openhands-agent"
+      target_branch:
+        required: false
+        type: string
+        default: "main"
+        description: "Target branch to pull and create PR against"
+      pr_type:
+        required: false
+        type: string
+        default: "draft"
+        description: "The PR type that is going to be created (draft, ready)"
+      LLM_MODEL:
+        required: false
+        type: string
+        default: "anthropic/claude-sonnet-4-20250514"
+      LLM_API_VERSION:
+        required: false
+        type: string
+        default: ""
+      base_container_image:
+        required: false
+        type: string
+        default: ""
+        description: "Custom sandbox env"
+      runner:
+        required: false
+        type: string
+        default: "ubuntu-latest"
+    secrets:
+      LLM_MODEL:
+        required: false
+      LLM_API_KEY:
+        required: true
+      LLM_BASE_URL:
+        required: false
+      PAT_TOKEN:
+        required: false
+      PAT_USERNAME:
+        required: false
+
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled, opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  auto-review:
+    if: |
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') &&
+      github.event.pull_request.user.login != 'openhands-agent' &&
+      contains(github.event.pull_request.title, '[ForteBank-AI-Review]')
+    runs-on: "${{ inputs.runner || 'ubuntu-latest' }}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upgrade pip
+        run: |
+          python -m pip install --upgrade pip
+
+      - name: Get latest versions and create requirements.txt
+        run: |
+          python -m pip index versions openhands-ai > openhands_versions.txt
+          OPENHANDS_VERSION=$(head -n 1 openhands_versions.txt | awk '{print $2}' | tr -d '()')
+
+          # Create a new requirements.txt locally within the workflow, ensuring no reference to the repo's file
+          echo "openhands-ai==${OPENHANDS_VERSION}" > /tmp/requirements.txt
+          cat /tmp/requirements.txt
+
+      - name: Cache pip dependencies
+        if: |
+          !(
+            github.event.label.name == 'fix-me-experimental' ||
+            (
+              (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') &&
+              contains(github.event.comment.body, '@openhands-agent-exp')
+            ) ||
+            (
+              github.event_name == 'pull_request_review' &&
+              contains(github.event.review.body, '@openhands-agent-exp')
+            )
+          )
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages/*
+          key: ${{ runner.os }}-pip-openhands-resolver-${{ hashFiles('/tmp/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-openhands-resolver-${{ hashFiles('/tmp/requirements.txt') }}
+
+      - name: Check required environment variables
+        env:
+          LLM_MODEL: ${{ secrets.LLM_MODEL || inputs.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_VERSION: ${{ inputs.LLM_API_VERSION }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          PAT_USERNAME: ${{ secrets.PAT_USERNAME }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          required_vars=("LLM_API_KEY")
+          for var in "${required_vars[@]}"; do
+            if [ -z "${!var}" ]; then
+              echo "Error: Required environment variable $var is not set."
+              exit 1
+            fi
+          done
+
+          # Check optional variables and warn about fallbacks
+          if [ -z "$LLM_BASE_URL" ]; then
+            echo "Warning: LLM_BASE_URL is not set, will use default API endpoint"
+          fi
+
+          if [ -z "$PAT_TOKEN" ]; then
+            echo "Warning: PAT_TOKEN is not set, falling back to GITHUB_TOKEN"
+          fi
+
+          if [ -z "$PAT_USERNAME" ]; then
+            echo "Warning: PAT_USERNAME is not set, will use openhands-agent"
+          fi
+
+      - name: Set environment variables
+        env:
+          REVIEW_BODY: ${{ github.event.review.body || '' }}
+        run: |
+          # Handle pull request events first
+          if [ -n "${{ github.event.pull_request.number }}" ]; then
+            echo "ISSUE_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+            echo "ISSUE_TYPE=pr" >> $GITHUB_ENV
+          # Handle pull request review events
+          elif [ -n "$REVIEW_BODY" ]; then
+            echo "ISSUE_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+            echo "ISSUE_TYPE=pr" >> $GITHUB_ENV
+          # Handle issue comment events that reference a PR
+          elif [ -n "${{ github.event.issue.pull_request }}" ]; then
+            echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+            echo "ISSUE_TYPE=pr" >> $GITHUB_ENV
+          # Handle regular issue events
+          else
+            echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
+            echo "ISSUE_TYPE=issue" >> $GITHUB_ENV
+          fi
+
+          if [ -n "$REVIEW_BODY" ]; then
+            echo "COMMENT_ID=${{ github.event.review.id || 'None' }}" >> $GITHUB_ENV
+          else
+            echo "COMMENT_ID=${{ github.event.comment.id || 'None' }}" >> $GITHUB_ENV
+          fi
+
+          echo "MAX_ITERATIONS=${{ inputs.max_iterations || 50 }}" >> $GITHUB_ENV
+          echo "SANDBOX_ENV_GITHUB_TOKEN=${{ secrets.PAT_TOKEN || github.token }}" >> $GITHUB_ENV
+          echo "SANDBOX_BASE_CONTAINER_IMAGE=${{ inputs.base_container_image }}" >> $GITHUB_ENV
+
+          # Set branch variables
+          echo "TARGET_BRANCH=${{ inputs.target_branch || 'main' }}" >> $GITHUB_ENV
+
+
+      - name: Install OpenHands
+        id: install_openhands
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          REVIEW_BODY: ${{ github.event.review.body || '' }}
+          LABEL_NAME: ${{ github.event.label.name || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+        with:
+          script: |
+            const commentBody = process.env.COMMENT_BODY.trim();
+            const reviewBody = process.env.REVIEW_BODY.trim();
+            const labelName = process.env.LABEL_NAME.trim();
+            const eventName = process.env.EVENT_NAME.trim();
+            // Check conditions
+            const isExperimentalLabel = labelName === "fix-me-experimental";
+            const isIssueCommentExperimental =
+              (eventName === "issue_comment" || eventName === "pull_request_review_comment") &&
+              commentBody.includes("@openhands-agent-exp");
+            const isReviewCommentExperimental =
+              eventName === "pull_request_review" && reviewBody.includes("@openhands-agent-exp");
+
+            // Set output variable
+            core.setOutput('isExperimental', isExperimentalLabel || isIssueCommentExperimental || isReviewCommentExperimental);
+
+            // Perform package installation
+            if (isExperimentalLabel || isIssueCommentExperimental || isReviewCommentExperimental) {
+              console.log("Installing experimental OpenHands...");
+
+              await exec.exec("pip install git+https://github.com/openhands/openhands.git");
+            } else {
+              console.log("Installing from requirements.txt...");
+
+              await exec.exec("pip install -r /tmp/requirements.txt");
+            }
+
+      - name: Attempt to resolve issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
+          GITHUB_USERNAME: ${{ secrets.PAT_USERNAME || 'openhands-agent' }}
+          GIT_USERNAME: ${{ secrets.PAT_USERNAME || 'openhands-agent' }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL || inputs.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_VERSION: ${{ inputs.LLM_API_VERSION }}
+          PYTHONPATH: ""
+        run: |
+          python -m openhands.resolver.review_pr \
+            --selected-repo ${{ github.repository }} \
+            --issue-number ${{ github.event.pull_request.number }} \
+            --token ${{ env.GITHUB_TOKEN }} \
+            --username ${{ env.GITHUB_USERNAME }} \
+            --llm-model ${{ env.LLM_MODEL }} \
+            --llm-api-key ${{ env.LLM_API_KEY }} \
+            --llm-base-url ${{ env.LLM_BASE_URL }}
