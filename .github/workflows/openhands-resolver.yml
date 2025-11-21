@@ -139,7 +139,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
         run: |
-          python -m openhands.resolver.review_pr \
+          cd /tmp && python -m openhands.resolver.review_pr \
             --selected-repo ${{ github.repository }} \
             --issue-number ${{ github.event.pull_request.number }} \
             --token "$GITHUB_TOKEN" \
