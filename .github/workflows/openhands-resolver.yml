@@ -1,4 +1,4 @@
-name: Auto-Fix Tagged Issue with OpenHands
+name: Auto Review PR Issue with OpenHands
 
 on:
   workflow_call:
