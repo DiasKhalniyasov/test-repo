@@ -87,34 +87,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
 
-      - name: Get latest versions and create requirements.txt
-        run: |
-          python -m pip index versions openhands-ai > openhands_versions.txt
-          OPENHANDS_VERSION=$(head -n 1 openhands_versions.txt | awk '{print $2}' | tr -d '()')
 
-          # Create a new requirements.txt locally within the workflow, ensuring no reference to the repo's file
-          echo "openhands-ai==${OPENHANDS_VERSION}" > /tmp/requirements.txt
-          cat /tmp/requirements.txt
-
-      - name: Cache pip dependencies
-        if: |
-          !(
-            github.event.label.name == 'fix-me-experimental' ||
-            (
-              (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment') &&
-              contains(github.event.comment.body, '@openhands-agent-exp')
-            ) ||
-            (
-              github.event_name == 'pull_request_review' &&
-              contains(github.event.review.body, '@openhands-agent-exp')
-            )
-          )
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.pythonLocation }}/lib/python3.12/site-packages/*
-          key: ${{ runner.os }}-pip-openhands-resolver-${{ hashFiles('/tmp/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-openhands-resolver-${{ hashFiles('/tmp/requirements.txt') }}
 
       - name: Check required environment variables
         env:
@@ -184,40 +157,8 @@ jobs:
 
 
       - name: Install OpenHands
-        id: install_openhands
-        uses: actions/github-script@v7
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body || '' }}
-          REVIEW_BODY: ${{ github.event.review.body || '' }}
-          LABEL_NAME: ${{ github.event.label.name || '' }}
-          EVENT_NAME: ${{ github.event_name }}
-        with:
-          script: |
-            const commentBody = process.env.COMMENT_BODY.trim();
-            const reviewBody = process.env.REVIEW_BODY.trim();
-            const labelName = process.env.LABEL_NAME.trim();
-            const eventName = process.env.EVENT_NAME.trim();
-            // Check conditions
-            const isExperimentalLabel = labelName === "fix-me-experimental";
-            const isIssueCommentExperimental =
-              (eventName === "issue_comment" || eventName === "pull_request_review_comment") &&
-              commentBody.includes("@openhands-agent-exp");
-            const isReviewCommentExperimental =
-              eventName === "pull_request_review" && reviewBody.includes("@openhands-agent-exp");
-
-            // Set output variable
-            core.setOutput('isExperimental', isExperimentalLabel || isIssueCommentExperimental || isReviewCommentExperimental);
-
-            // Perform package installation
-            if (isExperimentalLabel || isIssueCommentExperimental || isReviewCommentExperimental) {
-              console.log("Installing experimental OpenHands...");
-
-              await exec.exec("pip install git+https://github.com/openhands/openhands.git");
-            } else {
-              console.log("Installing from requirements.txt...");
-
-              await exec.exec("pip install -r /tmp/requirements.txt");
-            }
+        run: |
+          python -m pip install git+https://github.com/DiasKhalniyasov/openhands-fork.git
 
       - name: Attempt to resolve issue
         env:
