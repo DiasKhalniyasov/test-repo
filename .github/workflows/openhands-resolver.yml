@@ -82,6 +82,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Get latest versions and create requirements.txt
+        run: |
+          python -m pip index versions openhands-ai > openhands_versions.txt
+          OPENHANDS_VERSION=$(head -n 1 openhands_versions.txt | awk '{print $2}' | tr -d '()')
+
+          # Create a new requirements.txt locally within the workflow, ensuring no reference to the repo's file
+          echo "openhands-ai==${OPENHANDS_VERSION}" > /tmp/requirements.txt
+          cat /tmp/requirements.txt
 
       - name: Upgrade pip
         run: |
