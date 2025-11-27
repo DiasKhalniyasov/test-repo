@@ -1,0 +1,9 @@
+{
+  "name": "login-test-app",
+  "version": "1.0.0",
+  "description": "Simple login page for testing frontend-tester agent",
+  "scripts": {
+    "dev": "npx serve . -l 3000",
+    "start": "npx serve . -l 3000"
+  }
+}

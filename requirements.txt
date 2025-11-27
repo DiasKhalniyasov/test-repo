@@ -1,0 +1,4 @@
+# Requirements for local frontend-tester testing
+# Install from parent directory:
+#   pip install -r ../requirements.txt
+-r ../requirements.txt
